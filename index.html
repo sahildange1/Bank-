@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Real-Time Attendance System</title>
+<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Inter',sans-serif}
+body{background:#0f172a;color:#fff}
+header{background:#1e293b;padding:15px;text-align:center;font-size:20px;font-weight:600}
+.container{padding:20px}
+.card{background:#1e293b;padding:20px;border-radius:12px;margin-bottom:20px}
+.flex{display:flex;gap:20px;flex-wrap:wrap}
+.stat{flex:1;min-width:150px;text-align:center;padding:20px;border-radius:10px}
+.present{background:#16a34a}
+.absent{background:#dc2626}
+.late{background:#eab308}
+button{padding:10px 15px;border:none;border-radius:8px;background:#3b82f6;color:white;cursor:pointer}
+button:hover{opacity:0.9}
+input,select{padding:8px;border-radius:6px;border:none;margin:5px 0;width:100%}
+.hidden{display:none}
+table{width:100%;border-collapse:collapse;margin-top:10px}
+th,td{padding:8px;border-bottom:1px solid #334155;text-align:left}
+@media(max-width:600px){.flex{flex-direction:column}}
+</style>
+</head>
+<body>
+
+<header>
+Real-Time Attendance System (Bank / School Mode)
+</header>
+
+<div class="container">
+
+<!-- LOGIN -->
+<div id="loginCard" class="card">
+<h3>Login</h3>
+<select id="role">
+<option value="manager">Manager / Principal</option>
+<option value="staff">Staff / Teacher</option>
+<option value="employee">Employee / Student</option>
+</select>
+<input type="text" id="username" placeholder="Username">
+<input type="password" id="password" placeholder="Password">
+<button onclick="login()">Login</button>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dashboard" class="hidden">
+
+<div class="card">
+<h3>Live Attendance Dashboard</h3>
+<div class="flex">
+<div class="stat present">
+<h2 id="presentCount">0</h2>
+<p>Present</p>
+</div>
+<div class="stat absent">
+<h2 id="absentCount">0</h2>
+<p>Absent</p>
+</div>
+<div class="stat late">
+<h2 id="lateCount">0</h2>
+<p>Late</p>
+</div>
+</div>
+</div>
+
+<div class="card">
+<h3>Clock In / Scan</h3>
+<input type="text" id="userId" placeholder="Enter ID / Scan RFID">
+<button onclick="clockIn()">Clock In</button>
+<button onclick="generateReport()">Generate Report</button>
+<p id="status"></p>
+</div>
+
+<div class="card">
+<h3>Live Activity</h3>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Status</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody id="activityTable"></tbody>
+</table>
+</div>
+
+</div>
+</div>
+
+<script>
+// Replace with backend server URL
+const socket = io("http://localhost:3000"); 
+
+let present = 0;
+let absent = 0;
+let late = 0;
+
+function login(){
+document.getElementById("loginCard").classList.add("hidden");
+document.getElementById("dashboard").classList.remove("hidden");
+}
+
+function clockIn(){
+let id = document.getElementById("userId").value;
+if(!id) return alert("Enter ID");
+
+let time = new Date().toLocaleTimeString();
+let statusType = "Present";
+
+present++;
+document.getElementById("presentCount").innerText = present;
+
+let row = `<tr>
+<td>${id}</td>
+<td>${statusType}</td>
+<td>${time}</td>
+</tr>`;
+document.getElementById("activityTable").innerHTML += row;
+
+document.getElementById("status").innerText="Attendance Marked";
+
+// Emit to backend for real-time broadcast
+socket.emit("attendanceMarked",{id,statusType,time});
+}
+
+// Listen real-time updates
+socket.on("updateDashboard", data=>{
+document.getElementById("presentCount").innerText=data.present;
+document.getElementById("absentCount").innerText=data.absent;
+document.getElementById("lateCount").innerText=data.late;
+});
+
+function generateReport(){
+alert("Report Generated (Backend API Required for PDF/Excel)");
+}
+</script>
+
+</body>
+</html>
