@@ -1,0 +1,451 @@
+// Prisma schema — Phase 3.
+//
+// Matches the ER diagram and schema proposal in docs/architecture. Money is
+// always BigInt minor units, never Float. Every tenant-owned table carries
+// organizationId for row-level tenant scoping (enforced in application code
+// via a Prisma middleware in Phase 4 — this schema alone does not enforce
+// isolation).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Organizations & Users
+// ---------------------------------------------------------------------------
+
+enum OrgStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+model Organization {
+  id        String    @id @default(uuid())
+  legalName String
+  status    OrgStatus @default(PENDING)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  users            User[]
+  roles            Role[]
+  accounts         Account[]
+  beneficiaries    Beneficiary[]
+  payments         Payment[]
+  approvalPolicies ApprovalPolicy[]
+  auditEvents      AuditEvent[]
+  documents        Document[]
+  apiClients       ApiClient[]
+  ledgerGroups     LedgerEntryGroup[]
+
+  @@index([status])
+  @@map("organizations")
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DISABLED
+}
+
+model User {
+  id               String     @id @default(uuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id])
+  email            String
+  passwordHash     String
+  status           UserStatus @default(INVITED)
+  failedLoginCount Int        @default(0)
+  lockedUntil      DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  userRoles          UserRole[]
+  sessions           Session[]
+  mfaFactors         MfaFactor[]
+  createdPayments      Payment[]                @relation("PaymentCreatedBy")
+  paymentApprovals     PaymentApproval[]
+  paymentTransitions   PaymentStateTransition[]  @relation("TransitionActor")
+  auditEventsAsActor   AuditEvent[]              @relation("AuditActor")
+  beneficiariesCreated Beneficiary[]             @relation("BeneficiaryCreatedBy")
+  beneficiariesVerified Beneficiary[]            @relation("BeneficiaryVerifiedBy")
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// RBAC: Roles & Permissions
+// ---------------------------------------------------------------------------
+
+model Permission {
+  id          String @id @default(uuid())
+  key         String @unique // e.g. "payments.approve"
+  description String
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model Role {
+  id             String   @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String
+  isSystemRole   Boolean  @default(false) // seeded default roles vs. org-created custom roles
+  createdAt      DateTime @default(now())
+
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@map("roles")
+}
+
+model RolePermission {
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// ---------------------------------------------------------------------------
+// Auth: Sessions & MFA
+// ---------------------------------------------------------------------------
+
+model Session {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceInfo String?
+  ipAddress  String?
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+enum MfaType {
+  TOTP
+}
+
+model MfaFactor {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type            MfaType  @default(TOTP)
+  secretEncrypted String
+  verified        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+  @@map("mfa_factors")
+}
+
+// ---------------------------------------------------------------------------
+// Accounts
+// ---------------------------------------------------------------------------
+
+enum AccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+// Added in Phase 10 so payment execution (APPROVED -> PROCESSING ->
+// COMPLETED, architecture §9's "destination-side placeholder" entry) has
+// somewhere to post the CREDIT side of a payment leaving the organization
+// to an external beneficiary, without inventing a second ledger-entry
+// target type. A SETTLEMENT account is Ledger-domain plumbing, not
+// something a corporate user created or should see: AccountsService
+// filters it out of listAccounts()/getAccount() (see Phase 10 write-up),
+// and only LedgerService.getOrCreateSettlementAccount() is allowed to
+// create one — same single-writer discipline as every other
+// balance-affecting operation in this codebase.
+enum AccountPurpose {
+  CUSTOMER
+  SETTLEMENT
+}
+
+model Account {
+  id                String         @id @default(uuid())
+  organizationId    String
+  organization      Organization   @relation(fields: [organizationId], references: [id])
+  accountNumber     String         @unique
+  currency          String         @db.Char(3)
+  balanceMinorUnits BigInt         @default(0) // cache only — source of truth is SUM(LedgerEntry)
+  status            AccountStatus  @default(ACTIVE)
+  purpose           AccountPurpose @default(CUSTOMER)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  sourcedPayments Payment[]     @relation("PaymentSourceAccount")
+  ledgerEntries   LedgerEntry[]
+
+  @@index([organizationId])
+  @@map("accounts")
+}
+
+// ---------------------------------------------------------------------------
+// Beneficiaries
+// ---------------------------------------------------------------------------
+
+enum BeneficiaryVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+model Beneficiary {
+  id                 String                         @id @default(uuid())
+  organizationId     String
+  organization       Organization                   @relation(fields: [organizationId], references: [id])
+  name               String
+  accountNumber      String
+  bankIdentifier     String? // routing/SWIFT/IFSC-equivalent — sandbox only, format unconstrained
+  verificationStatus BeneficiaryVerificationStatus  @default(PENDING)
+  active             Boolean                         @default(true)
+  // Added in Phase 7 for the maker-checker rule on beneficiary verification
+  // (the creator cannot also be the verifier) and for cooling-off tracking.
+  // Nullable because the column is additive to an already-applied migration.
+  createdByUserId    String?
+  createdBy          User?                          @relation("BeneficiaryCreatedBy", fields: [createdByUserId], references: [id])
+  verifiedAt         DateTime?
+  verifiedByUserId   String?
+  verifiedBy         User?                          @relation("BeneficiaryVerifiedBy", fields: [verifiedByUserId], references: [id])
+  rejectionReason    String?
+  createdAt          DateTime                        @default(now())
+  updatedAt          DateTime                        @updatedAt
+
+  payments Payment[]
+
+  @@index([organizationId])
+  @@map("beneficiaries")
+}
+
+// ---------------------------------------------------------------------------
+// Approval Policies
+// ---------------------------------------------------------------------------
+
+model ApprovalPolicy {
+  id                  String       @id @default(uuid())
+  organizationId      String
+  organization        Organization @relation(fields: [organizationId], references: [id])
+  name                String
+  minAmountMinorUnits BigInt
+  maxAmountMinorUnits BigInt?      // null = no upper bound
+  requiredApprovals   Int          @default(1)
+  makerCanApproveOwn  Boolean      @default(false)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  payments Payment[]
+
+  @@index([organizationId])
+  @@map("approval_policies")
+}
+
+// ---------------------------------------------------------------------------
+// Payments (state machine — see architecture §8)
+// ---------------------------------------------------------------------------
+
+enum PaymentStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELLED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Payment {
+  id               String          @id @default(uuid())
+  organizationId   String
+  organization     Organization    @relation(fields: [organizationId], references: [id])
+  sourceAccountId  String
+  sourceAccount    Account         @relation("PaymentSourceAccount", fields: [sourceAccountId], references: [id])
+  beneficiaryId    String
+  beneficiary      Beneficiary     @relation(fields: [beneficiaryId], references: [id])
+  createdByUserId  String
+  createdBy        User            @relation("PaymentCreatedBy", fields: [createdByUserId], references: [id])
+  approvalPolicyId String?
+  approvalPolicy   ApprovalPolicy? @relation(fields: [approvalPolicyId], references: [id])
+  idempotencyKey   String          @unique
+  amountMinorUnits BigInt
+  currency         String          @db.Char(3)
+  status           PaymentStatus   @default(DRAFT)
+  reference        String?
+  scheduledFor     DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  approvals   PaymentApproval[]
+  transitions PaymentStateTransition[]
+  ledgerGroup LedgerEntryGroup?
+
+  @@index([organizationId, status])
+  @@index([sourceAccountId])
+  @@index([scheduledFor])
+  @@map("payments")
+}
+
+enum ApprovalDecision {
+  APPROVED
+  REJECTED
+}
+
+model PaymentApproval {
+  id             String           @id @default(uuid())
+  paymentId      String
+  payment        Payment          @relation(fields: [paymentId], references: [id])
+  approverUserId String
+  approver       User             @relation(fields: [approverUserId], references: [id])
+  decision       ApprovalDecision
+  reason         String?
+  decidedAt      DateTime         @default(now())
+
+  @@unique([paymentId, approverUserId]) // one decision per approver per payment
+  @@index([paymentId])
+  @@map("payment_approvals")
+}
+
+model PaymentStateTransition {
+  id          String   @id @default(uuid())
+  paymentId   String
+  payment     Payment  @relation(fields: [paymentId], references: [id])
+  fromState   String
+  toState     String
+  actorUserId String?
+  actor       User?    @relation("TransitionActor", fields: [actorUserId], references: [id])
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@index([paymentId])
+  @@map("payment_state_transitions")
+}
+
+// ---------------------------------------------------------------------------
+// Ledger (double-entry — see architecture §9)
+// ---------------------------------------------------------------------------
+
+model LedgerEntryGroup {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  paymentId      String?      @unique
+  payment        Payment?     @relation(fields: [paymentId], references: [id])
+  // Not every posting originates from a Payment — internal transfers
+  // (Phase 6) post directly without a Payment row, so they need their own
+  // idempotency key rather than relying on paymentId's uniqueness.
+  idempotencyKey String?      @unique
+  description    String
+  postedAt       DateTime     @default(now())
+
+  entries LedgerEntry[]
+
+  @@index([organizationId])
+  @@map("ledger_entry_groups")
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+model LedgerEntry {
+  id               String           @id @default(uuid())
+  groupId          String
+  group            LedgerEntryGroup @relation(fields: [groupId], references: [id])
+  accountId        String
+  account          Account          @relation(fields: [accountId], references: [id])
+  direction        LedgerDirection
+  amountMinorUnits BigInt
+  currency         String           @db.Char(3)
+  createdAt        DateTime         @default(now())
+
+  @@index([accountId])
+  @@index([groupId])
+  @@map("ledger_entries")
+}
+
+// ---------------------------------------------------------------------------
+// Audit (append-only — see architecture §10)
+// ---------------------------------------------------------------------------
+
+model AuditEvent {
+  id             String        @id @default(uuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  actorId        String?
+  actor          User?         @relation("AuditActor", fields: [actorId], references: [id])
+  action         String
+  resourceType   String
+  resourceId     String?
+  previousState  Json?
+  newState       Json?
+  metadata       Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([resourceType, resourceId])
+  @@map("audit_events")
+}
+
+// ---------------------------------------------------------------------------
+// Documents & API Clients
+// ---------------------------------------------------------------------------
+
+model Document {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  objectKey      String
+  docType        String
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@map("documents")
+}
+
+model ApiClient {
+  id               String       @id @default(uuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id])
+  clientId         String       @unique
+  clientSecretHash String
+  scopes           Json
+  active           Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+
+  @@index([organizationId])
+  @@map("api_clients")
+}

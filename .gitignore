@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.next/
+.turbo/
+*.log
+.env
+.env.local
+coverage/
+.DS_Store
+package-lock.json
+next-env.d.ts
+*.tsbuildinfo
