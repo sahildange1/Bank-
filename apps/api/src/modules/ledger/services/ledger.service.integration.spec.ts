@@ -1,6 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { TenantPrismaService } from '../../../common/prisma/tenant-prisma.service';
 import { AuditService } from '../../audit/services/audit.service';
 import { LedgerService } from './ledger.service';
 
@@ -26,7 +27,7 @@ describe('LedgerService (integration)', () => {
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      providers: [PrismaService, AuditService, LedgerService],
+      providers: [PrismaService, TenantPrismaService, AuditService, LedgerService],
     }).compile();
 
     prisma = moduleRef.get(PrismaService);

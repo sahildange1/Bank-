@@ -9,7 +9,7 @@ data model, and phased implementation plan.
 
 ## Status
 
-Phases 1–10 of the phased plan (`docs/architecture/phase1-architecture.md`
+Phases 1–11 of the phased plan (`docs/architecture/phase1-architecture.md`
 §14) are implemented:
 
 - **Phase 2** — monorepo scaffolding
@@ -89,8 +89,37 @@ Phases 1–10 of the phased plan (`docs/architecture/phase1-architecture.md`
     explicitly trying to avoid. Wiring this to a real queue is this
     phase's main open item.
 
+- **Phase 11** — audit system (read side). `AuditService.record()` has
+  written every state-changing mutation's audit row since Phase 4; this
+  phase adds the query/export side architecture §5 calls for:
+  - `GET /audit-events` (`audit.read` permission, already granted to
+    Auditor and Organization Admin since Phase 5): cursor-paginated
+    (`?cursor=&limit=`, architecture §5's convention — fetches `limit + 1`
+    rows to detect a next page without a separate `COUNT`), filterable by
+    `actorId`/`action`/`resourceType`/`resourceId`/`dateFrom`/`dateTo`, all
+    validated through a DTO (`QueryAuditEventsDto`) under the app's global
+    `ValidationPipe`. `organizationId` is never a filter field — it only
+    ever comes from the authenticated session, via
+    `TenantPrismaService.forOrg()`, same as every other tenant-scoped read.
+  - `GET /audit-events/export`: same filters, serialized as RFC 4180 CSV.
+    Capped at 5,000 rows (`AUDIT_EXPORT_MAX_ROWS`) — no background-worker
+    queue exists yet (the same gap Phase 10 flagged for payment execution),
+    so this is a single synchronous HTTP response; past the cap it returns
+    `413 Payload Too Large` with a message to narrow the filters, rather
+    than silently truncating the file.
+  - **Deliberately absent, on purpose**: any update or delete route.
+    Architecture §10 calls audit rows append-only and explicitly defers
+    full enforcement (a separate, more-privileged DB role for any future
+    archival/retention job, with the application's own role holding only
+    `INSERT`/`SELECT` on `audit_events`) as "out of scope for the
+    prototype." This phase's job was the part of that guarantee a single
+    DB role can't already provide — a service/controller surface with no
+    write path but `record()` and no delete path at all — not the
+    DB-role split, which was already a named, deferred item before this
+    phase started.
+
 Scheduled one-off payments (`Payment.scheduledFor`), notifications, the
-admin portal, and the frontends are not yet built (Phases 11+).
+admin portal, and the frontends are not yet built (Phases 12+).
 
 > **Note on Phase 7's origin:** most of `BeneficiariesService`, its DTOs,
 > and the schema/migration adding `createdByUserId`/`verifiedByUserId`/
@@ -150,6 +179,39 @@ admin portal, and the frontends are not yet built (Phases 11+).
 > half of this phase (`PaymentExecutionService`, `MockPaymentProviderService`,
 > the `AccountPurpose`/`SETTLEMENT` account split and its migration) — did
 > not exist yet and was written fresh.
+
+> **Note on Phase 11's environment:** no pre-existing audit-read code was
+> found this time — `AuditController`, the query DTO, the CSV util, and
+> `AuditService.queryEvents()`/`queryEventsForExport()` were all written
+> fresh. This phase's own compile check caught a real bug in that new code,
+> not an environment issue: `AuditService.record()` imported `Prisma`/
+> `PrismaClient` as named types directly from `@prisma/client`, which every
+> other service in this codebase deliberately avoids (see `ledger.service.ts`'s
+> `$transaction` callback, typed `any` for the same reason) — in a container
+> with no generated Prisma client at all, that import fails even as a
+> type-only import, not just at runtime. Fixed by typing the transaction
+> handle `any`, same convention as everywhere else. Once fixed,
+> `audit.service.spec.ts` (10 cases: `record`'s tx-vs-raw-client routing,
+> `queryEvents`'s filters/cursor/pagination/the `organizationId` field never
+> being accepted as a filter, `queryEventsForExport`'s cap and 413) and
+> `audit-csv.util.spec.ts` (5 cases: header row, null-vs-literal-"null"
+> handling, RFC 4180 quoting, JSON-serializing object fields, the
+> empty-list case) all pass. This container's `@prisma/client` has no
+> generated output whatsoever — not even the partial type stub prior phases
+> relied on for their `tsc`/`ts-jest` passes against `PrismaService`-backed
+> code (`npx prisma generate --no-engine` still needs to fetch
+> `schema-engine.gz` from the blocked `binaries.prisma.sh`, so even that
+> flag doesn't get around it) — so the pre-existing mocked-Prisma suites
+> that worked in Phases 9/10 (`approvals.service.spec.ts`,
+> `ledger.service.spec.ts`, `payments.service.spec.ts`,
+> `beneficiaries.service.spec.ts`, `reconciliation.service.spec.ts`,
+> `payment-execution.service.spec.ts`) currently fail to even run here, on
+> the same property-access-against-the-real-schema type errors shown
+> throughout this note — a strictly worse instance of the same
+> long-standing `binaries.prisma.sh` block, not a regression introduced by
+> this phase's code. Confirm against an environment with real network
+> access before trusting any of those suites' current red state.
+
 ## Stack
 
 - **Backend:** NestJS (TypeScript), PostgreSQL via Prisma, Redis, BullMQ
@@ -198,20 +260,35 @@ pnpm --filter @cbp/api test:integration   # requires DATABASE_URL + a real gener
 > and `LedgerEntryGroup.paymentId`'s unique constraint rejecting a second
 > execution attempt at the DB level). Unit tests that don't touch Prisma —
 > either pure logic (password hashing, TOTP, challenge tokens, the payment
-> state machine's full transition table) or a service exercised with
-> mocked Prisma/Audit dependencies (`BeneficiariesService`,
+> state machine's full transition table, CSV serialization) or a service
+> exercised with mocked Prisma/Audit dependencies (`BeneficiariesService`,
 > `PaymentsService`, `ApprovalsService`, `ReconciliationService`,
-> `PaymentExecutionService`, and `LedgerService.getOrCreateSettlementAccount`)
-> — were run for real: **95 passing** as of Phase 10. The integration test
-> suites (`test:integration`: `tenant-scope.extension.integration.spec.ts`,
+> `PaymentExecutionService`, `LedgerService.getOrCreateSettlementAccount`,
+> and, new in Phase 11, `AuditService`) were run for real against prior
+> containers with a usable type stub: **95 passing** as of Phase 10. As of
+> Phase 11, this container's `@prisma/client` has no generated output at
+> all (see that phase's environment note above), so only the suites with
+> no transitive dependency on `PrismaService`'s generated model types
+> currently run here: **54 passing** (`password.service.spec.ts`,
+> `challenge-token.service.spec.ts`, `totp.service.spec.ts`,
+> `payment-state-machine.spec.ts`, `audit-csv.util.spec.ts`, and
+> `audit.service.spec.ts`'s 10 new cases, once its one real bug — described
+> above — was fixed). The suites that worked in Phases 9/10
+> (`approvals.service.spec.ts`, `ledger.service.spec.ts`,
+> `payments.service.spec.ts`, `beneficiaries.service.spec.ts`,
+> `reconciliation.service.spec.ts`, `payment-execution.service.spec.ts`)
+> are unchanged and believed still correct, but need a container with a
+> real (or at least partially-generated) Prisma client to confirm. The
+> integration test suites (`test:integration`:
+> `tenant-scope.extension.integration.spec.ts`,
 > `organizations-users.integration.spec.ts`,
 > `ledger.service.integration.spec.ts`, `beneficiaries.integration.spec.ts`,
 > `payments.integration.spec.ts`, `approvals.integration.spec.ts`,
 > `reconciliation.service.integration.spec.ts`) are written, confirmed to
-> compile cleanly, and confirmed to fail only at Prisma client
-> initialization in this sandbox — but need a real generated Prisma client
-> to actually run. Run them in an environment with normal network access
-> before trusting this in CI.
+> compile cleanly in prior containers, and confirmed to fail only at Prisma
+> client initialization in this sandbox — but need a real generated Prisma
+> client to actually run. Run everything in an environment with normal
+> network access before trusting this in CI.
 
 ## Project structure
 
