@@ -5,6 +5,9 @@ import { TenantPrismaService } from '../../common/prisma/tenant-prisma.service';
 import { AuditService } from '../audit/services/audit.service';
 import { PaymentStateMachine } from '../payments/services/payment-state-machine';
 import { ApprovalsService } from './approvals.service';
+import { NotificationsService } from '../notifications/services/notifications.service';
+import { EMAIL_PROVIDER } from '../notifications/providers/email-provider';
+import { MockEmailProvider } from '../notifications/providers/mock-email.provider';
 
 /**
  * Same limitation as the other *.integration.spec.ts files in this repo
@@ -32,7 +35,15 @@ describe('ApprovalsService (integration)', () => {
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      providers: [PrismaService, TenantPrismaService, AuditService, PaymentStateMachine, ApprovalsService],
+      providers: [
+        PrismaService,
+        TenantPrismaService,
+        AuditService,
+        PaymentStateMachine,
+        NotificationsService,
+        { provide: EMAIL_PROVIDER, useClass: MockEmailProvider },
+        ApprovalsService,
+      ],
     }).compile();
 
     prisma = moduleRef.get(PrismaService);

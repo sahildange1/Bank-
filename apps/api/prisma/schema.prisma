@@ -43,6 +43,7 @@ model Organization {
   documents        Document[]
   apiClients       ApiClient[]
   ledgerGroups     LedgerEntryGroup[]
+  notifications    Notification[]
 
   @@index([status])
   @@map("organizations")
@@ -75,6 +76,7 @@ model User {
   auditEventsAsActor   AuditEvent[]              @relation("AuditActor")
   beneficiariesCreated Beneficiary[]             @relation("BeneficiaryCreatedBy")
   beneficiariesVerified Beneficiary[]            @relation("BeneficiaryVerifiedBy")
+  notifications        Notification[]
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -418,6 +420,40 @@ model AuditEvent {
   @@index([organizationId, createdAt])
   @@index([resourceType, resourceId])
   @@map("audit_events")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications (Phase 12) — in-app row per recipient, with an email
+// delivery status the background worker (not yet built) drains.
+// ---------------------------------------------------------------------------
+
+enum NotificationEmailStatus {
+  NOT_REQUESTED
+  PENDING
+  SENT
+  FAILED
+}
+
+model Notification {
+  id             String                  @id @default(uuid())
+  organizationId String
+  organization   Organization            @relation(fields: [organizationId], references: [id])
+  userId         String
+  user           User                    @relation(fields: [userId], references: [id])
+  type           String
+  title          String
+  body           String
+  resourceType   String?
+  resourceId     String?
+  readAt         DateTime?
+  emailStatus    NotificationEmailStatus @default(NOT_REQUESTED)
+  emailSentAt    DateTime?
+  createdAt      DateTime                @default(now())
+
+  @@index([organizationId, userId, createdAt])
+  @@index([userId, readAt])
+  @@index([emailStatus])
+  @@map("notifications")
 }
 
 // ---------------------------------------------------------------------------

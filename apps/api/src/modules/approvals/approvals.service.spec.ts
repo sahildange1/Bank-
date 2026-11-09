@@ -30,9 +30,10 @@ describe('ApprovalsService (unit, mocked Prisma)', () => {
     const tenantPrisma = { forOrg: jest.fn().mockReturnValue(scopedClient) };
     const auditService = { record: jest.fn().mockResolvedValue(undefined) };
     const stateMachine = new PaymentStateMachine();
+    const notifications = { notify: jest.fn().mockResolvedValue(undefined) };
 
-    const service = new ApprovalsService(rawPrisma as any, tenantPrisma as any, auditService as any, stateMachine);
-    return { service, scopedClient, rawPrisma, tx, auditService };
+    const service = new ApprovalsService(rawPrisma as any, tenantPrisma as any, auditService as any, stateMachine, notifications as any);
+    return { service, scopedClient, rawPrisma, tx, auditService, notifications };
   }
 
   const PENDING_PAYMENT = {
@@ -117,6 +118,23 @@ describe('ApprovalsService (unit, mocked Prisma)', () => {
       );
       expect(auditService.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'payment.approved' }), tx);
     });
+
+    it('notifies the payment creator on finalization, but not on partial quorum', async () => {
+      const { service, scopedClient, rawPrisma, tx, notifications } = makeService();
+      scopedClient.payment.findUnique.mockResolvedValue(PENDING_PAYMENT);
+      rawPrisma.approvalPolicy.findUnique.mockResolvedValue({ id: 'policy-1', requiredApprovals: 2, makerCanApproveOwn: false });
+      rawPrisma.paymentApproval.findUnique.mockResolvedValue(null);
+      tx.paymentApproval.count.mockResolvedValue(1);
+      await service.approvePayment(ORG_ID, APPROVER_ID, 'pay-1');
+      expect(notifications.notify).not.toHaveBeenCalled();
+
+      tx.paymentApproval.count.mockResolvedValue(2);
+      tx.payment.update.mockResolvedValue({ id: 'pay-1', status: 'APPROVED' });
+      await service.approvePayment(ORG_ID, APPROVER_ID, 'pay-1');
+      expect(notifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: ORG_ID, userId: MAKER_ID, type: 'payment.approved' }),
+      );
+    });
   });
 
   describe('rejectPayment', () => {
@@ -162,6 +180,19 @@ describe('ApprovalsService (unit, mocked Prisma)', () => {
         }),
       );
       expect(auditService.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'payment.rejected' }), tx);
+    });
+
+    it('notifies the payment creator when the payment is rejected', async () => {
+      const { service, scopedClient, rawPrisma, tx, notifications } = makeService();
+      scopedClient.payment.findUnique.mockResolvedValue(PENDING_PAYMENT);
+      rawPrisma.paymentApproval.findUnique.mockResolvedValue(null);
+      tx.payment.update.mockResolvedValue({ id: 'pay-1', status: 'REJECTED' });
+
+      await service.rejectPayment(ORG_ID, APPROVER_ID, 'pay-1', 'looks fraudulent');
+
+      expect(notifications.notify).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: MAKER_ID, type: 'payment.rejected', resourceId: 'pay-1' }),
+      );
     });
   });
 

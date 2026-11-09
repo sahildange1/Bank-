@@ -9,7 +9,7 @@ data model, and phased implementation plan.
 
 ## Status
 
-Phases 1–11 of the phased plan (`docs/architecture/phase1-architecture.md`
+Phases 1–12 of the phased plan (`docs/architecture/phase1-architecture.md`
 §14) are implemented:
 
 - **Phase 2** — monorepo scaffolding
@@ -118,8 +118,32 @@ Phases 1–11 of the phased plan (`docs/architecture/phase1-architecture.md`
     DB-role split, which was already a named, deferred item before this
     phase started.
 
-Scheduled one-off payments (`Payment.scheduledFor`), notifications, the
-admin portal, and the frontends are not yet built (Phases 12+).
+- **Phase 12** — notifications. A `Notification` row per recipient
+  (tenant-scoped, new migration `20250106000000_notifications`) with an
+  email delivery status.
+  - **API** (`SessionAuthGuard` only — everyone may read their own inbox):
+    `GET /notifications` (cursor-paginated, `?unreadOnly=true`),
+    `GET /notifications/unread-count`, `POST /notifications/:id/read`,
+    `POST /notifications/read-all`. There is no `userId` parameter
+    anywhere: every query filters on the session's user, so someone
+    else's notification id returns 404, indistinguishable from a missing
+    one (no IDOR).
+  - **Email** goes through an `EmailProvider` abstraction (architecture
+    decision #9; SMS/push are interfaces only). `notify()` never sends
+    inline — it marks the row `PENDING`, and `dispatchPendingEmails()`
+    drains them through the provider. Like Phase 10's payment execution,
+    that is **deliberately not exposed over HTTP** (architecture §3:
+    workers own email) and waits on the same missing queue layer. The
+    shipped provider is a mock that logs recipient + subject, never the
+    body. A failed send is marked `FAILED`, not retried forever.
+  - **Wiring**: `ApprovalsService` notifies the payment's creator when it
+    is finalized as approved or rejected (not on partial N-of-M progress).
+    Sent after the transaction commits and best-effort — a notification
+    failure can never undo or fail an approval. Other triggers (payment
+    executed/failed, beneficiary verified, invites) are not wired yet.
+
+Scheduled one-off payments (`Payment.scheduledFor`), the admin portal, and
+the frontends are not yet built (Phases 13+).
 
 > **Note on Phase 7's origin:** most of `BeneficiariesService`, its DTOs,
 > and the schema/migration adding `createdByUserId`/`verifiedByUserId`/
@@ -179,6 +203,19 @@ admin portal, and the frontends are not yet built (Phases 12+).
 > half of this phase (`PaymentExecutionService`, `MockPaymentProviderService`,
 > the `AccountPurpose`/`SETTLEMENT` account split and its migration) — did
 > not exist yet and was written fresh.
+
+> **Note on Phase 12's test setup:** `jest.config.js` now detects when no
+> generated Prisma client exists and, only then, stubs `@prisma/client`
+> and turns off ts-jest type diagnostics, so the mocked-Prisma unit specs
+> run even where `binaries.prisma.sh` is blocked. This restored the six
+> suites Phase 11 found unrunnable (**125 passing across 13 suites** now).
+> With a real generated client nothing changes: full type-checking, no
+> stub. Trade-off: in a stubbed environment the specs no longer
+> type-check against the schema, so run `tsc` and the integration suites
+> somewhere with network access before trusting a build. The new
+> migration was applied after all earlier ones on live Postgres: the
+> table, defaults and both foreign keys behave (dangling user/org ids are
+> rejected).
 
 > **Note on Phase 11's environment:** no pre-existing audit-read code was
 > found this time — `AuditController`, the query DTO, the CSV util, and

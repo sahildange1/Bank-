@@ -3,6 +3,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { TenantPrismaService } from '../../common/prisma/tenant-prisma.service';
 import { AuditService } from '../audit/services/audit.service';
 import { PaymentStateMachine, PaymentStatus } from '../payments/services/payment-state-machine';
+import { NotificationsService } from '../notifications/services/notifications.service';
 
 /**
  * Phase 9 scope: PENDING_APPROVAL -> APPROVED/REJECTED (see
@@ -34,6 +35,7 @@ export class ApprovalsService {
     private readonly tenantPrisma: TenantPrismaService,
     private readonly auditService: AuditService,
     private readonly stateMachine: PaymentStateMachine,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async listApprovals(organizationId: string, paymentId: string) {
@@ -142,6 +144,22 @@ export class ApprovalsService {
       return { payment: updated, approvedCount, requiredApprovals: policy.requiredApprovals, finalized: true };
     });
 
+    // Phase 12: tell the maker once the payment is finalized. Sent after the
+    // transaction commits and best-effort (notify() never throws), so a
+    // notification problem can't undo or fail an approval.
+    if (result.finalized && payment.createdByUserId) {
+      await this.notifications.notify({
+        organizationId,
+        userId: payment.createdByUserId,
+        type: 'payment.approved',
+        title: 'Payment approved',
+        body: 'Your payment has been approved and is queued for execution.',
+        resourceType: 'Payment',
+        resourceId: paymentId,
+        email: true,
+      });
+    }
+
     return result;
   }
 
@@ -201,6 +219,19 @@ export class ApprovalsService {
       );
       return result;
     });
+
+    if (payment.createdByUserId) {
+      await this.notifications.notify({
+        organizationId,
+        userId: payment.createdByUserId,
+        type: 'payment.rejected',
+        title: 'Payment rejected',
+        body: 'Your payment was rejected by an approver. Open the payment for the reason.',
+        resourceType: 'Payment',
+        resourceId: paymentId,
+        email: true,
+      });
+    }
 
     return updated;
   }

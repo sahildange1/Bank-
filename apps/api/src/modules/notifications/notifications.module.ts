@@ -1,6 +1,15 @@
-import { Module } from '@nestjs/common';
+import { Global, Module } from '@nestjs/common';
+import { NotificationsController } from './notifications.controller';
+import { NotificationsService } from './services/notifications.service';
+import { EMAIL_PROVIDER } from './providers/email-provider';
+import { MockEmailProvider } from './providers/mock-email.provider';
 
-// Scaffolded in Phase 2. Controllers, services, and DTOs for this module
-// are implemented in the phase that owns this domain (see docs/architecture).
-@Module({})
+// Global so feature modules (approvals, payments, ...) can call notify()
+// without importing this module, the same way AuditModule works.
+@Global()
+@Module({
+  controllers: [NotificationsController],
+  providers: [NotificationsService, { provide: EMAIL_PROVIDER, useClass: MockEmailProvider }],
+  exports: [NotificationsService],
+})
 export class NotificationsModule {}

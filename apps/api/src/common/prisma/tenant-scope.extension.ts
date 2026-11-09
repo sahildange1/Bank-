@@ -46,6 +46,7 @@ const TENANT_SCOPED_MODELS = new Set([
   'Document',
   'ApiClient',
   'AuditEvent',
+  'Notification',
 ]);
 
 const READ_OPERATIONS = new Set(['findMany', 'findFirst', 'findFirstOrThrow', 'count', 'aggregate', 'groupBy']);
