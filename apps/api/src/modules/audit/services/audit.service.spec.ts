@@ -164,6 +164,30 @@ describe('AuditService (unit, mocked Prisma)', () => {
     });
   });
 
+  describe('queryEventsPlatform (Phase 13, cross-tenant)', () => {
+    it('uses the raw client (not forOrg) and honours the organizationId filter', async () => {
+      const { service, rawPrisma, tenantPrisma } = makeService();
+      (rawPrisma.auditEvent as any).findMany = jest.fn().mockResolvedValue([]);
+      await service.queryEventsPlatform({ organizationId: 'org-9', action: 'payment.created' });
+      expect(tenantPrisma.forOrg).not.toHaveBeenCalled();
+      expect((rawPrisma.auditEvent as any).findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { action: 'payment.created', organizationId: 'org-9' } }),
+      );
+    });
+
+    it('with no organizationId, searches every organization; same cursor pagination', async () => {
+      const { service, rawPrisma } = makeService();
+      (rawPrisma.auditEvent as any).findMany = jest
+        .fn()
+        .mockResolvedValue([EVENT({ id: 'a' }), EVENT({ id: 'b' }), EVENT({ id: 'c' })]);
+      const res = await service.queryEventsPlatform({ limit: 2, cursor: 'z' });
+      const call = (rawPrisma.auditEvent as any).findMany.mock.calls[0][0];
+      expect(call.where).not.toHaveProperty('organizationId');
+      expect(call).toEqual(expect.objectContaining({ cursor: { id: 'z' }, skip: 1, take: 3 }));
+      expect(res.nextCursor).toBe('b');
+    });
+  });
+
   describe('queryEventsForExport', () => {
     it('scopes through forOrg and returns the raw rows when under the cap', async () => {
       const { service, scopedClient, tenantPrisma } = makeService();

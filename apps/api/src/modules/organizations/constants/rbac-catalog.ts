@@ -59,3 +59,23 @@ export const DEFAULT_ROLE_PERMISSIONS: Readonly<Record<string, readonly string[]
 };
 
 export const DEFAULT_ADMIN_ROLE_NAME = 'Organization Admin';
+
+/**
+ * Phase 13: platform-operator permissions. Deliberately NOT part of
+ * PERMISSIONS above, so DEFAULT_ROLE_PERMISSIONS['Organization Admin']
+ * (which grants every PERMISSIONS entry) can never include them — a
+ * customer organization has no way to receive these through the normal
+ * role templates. They are only attached to the 'Platform Operator' role
+ * of the single platform organization (see prisma/seed.ts), and
+ * PlatformOperatorGuard additionally requires the caller to belong to that
+ * organization, so a stray grant elsewhere would still be inert.
+ */
+export const PLATFORM_PERMISSIONS: ReadonlyArray<{ key: string; description: string }> = [
+  { key: 'platform.organizations.read', description: 'List and view every customer organization' },
+  { key: 'platform.organizations.manage', description: 'Approve, suspend, reactivate or close a customer organization' },
+  { key: 'platform.audit.read', description: 'Search the audit trail across all organizations' },
+  { key: 'platform.stats.read', description: 'View platform-wide statistics' },
+];
+
+export const PLATFORM_ROLE_NAME = 'Platform Operator';
+export const PLATFORM_ORGANIZATION_NAME = 'Platform Operations';

@@ -19,6 +19,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { ApiClientsModule } from './modules/api-clients/api-clients.module';
+import { AdminModule } from './modules/admin/admin.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { ApiClientsModule } from './modules/api-clients/api-clients.module';
     NotificationsModule,
     ReportsModule,
     ApiClientsModule,
+    AdminModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

@@ -30,6 +30,10 @@ model Organization {
   id        String    @id @default(uuid())
   legalName String
   status    OrgStatus @default(PENDING)
+  // Phase 13: marks the single internal organization whose users are bank
+  // staff (platform operators). A DB-level partial unique index guarantees
+  // at most one — see migration 20250107000000_platform_organization.
+  isPlatform Boolean  @default(false)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 

@@ -9,7 +9,7 @@ data model, and phased implementation plan.
 
 ## Status
 
-Phases 1–12 of the phased plan (`docs/architecture/phase1-architecture.md`
+Phases 1–13 of the phased plan (`docs/architecture/phase1-architecture.md`
 §14) are implemented:
 
 - **Phase 2** — monorepo scaffolding
@@ -142,8 +142,62 @@ Phases 1–12 of the phased plan (`docs/architecture/phase1-architecture.md`
     failure can never undo or fail an approval. Other triggers (payment
     executed/failed, beneficiary verified, invites) are not wired yet.
 
-Scheduled one-off payments (`Payment.scheduledFor`), the admin portal, and
-the frontends are not yet built (Phases 13+).
+- **Phase 13** — admin portal (backend + `apps/admin` UI). Bank staff
+  ("platform operators") act across all customer organizations, which
+  nothing in the earlier phases modelled, so this phase added it:
+  - **Operator model:** a single internal *platform organization*
+    (`Organization.isPlatform`, at most one — enforced by a partial unique
+    index, migration `20250107000000_platform_organization`) whose users
+    hold a `Platform Operator` role with four new `platform.*`
+    permissions. These are kept out of the customer `PERMISSIONS` list, so
+    the *Organization Admin* template (which grants every customer
+    permission) can never include them. Login, MFA, sessions and RBAC are
+    reused; no second auth system.
+  - **Access** to `/admin/*` needs all of: a valid session
+    (`SessionAuthGuard`), membership of the ACTIVE platform organization
+    and a **verified MFA factor** (`PlatformOperatorGuard`, checked live in
+    the database), and the specific `platform.*` permission. A permission
+    granted by mistake inside a customer org is therefore inert, and an
+    operator without MFA is refused until they enroll.
+  - **Endpoints:** `GET /admin/organizations` (status/name filter, cursor
+    pagination) and `/:id`; `POST /admin/organizations/:id/{approve,
+    suspend,reactivate,close}`; `GET /admin/stats`; `GET /admin/audit-events`
+    (all organizations, optional `organizationId` filter that exists only on
+    this path). Lifecycle: PENDING→ACTIVE (approve); ACTIVE→SUSPENDED;
+    SUSPENDED→ACTIVE; PENDING/ACTIVE/SUSPENDED→CLOSED (terminal; closing a
+    PENDING org is how an application is rejected). Suspend and close
+    require a written reason.
+  - **Safety:** each change is a compare-and-set on the validated status
+    inside one transaction with its audit row (two operators racing get a
+    409, not two transitions); suspend/close revoke every live session of
+    that organization in the same transaction, and `SessionAuthGuard` now
+    also rejects any session whose organization is not ACTIVE. The platform
+    organization itself can't be changed through the API. Reading the
+    cross-organization audit trail is itself written to the audit trail.
+    Approval notifies the organization's admins (Phase 12).
+  - **Bootstrapping** (no secrets in source): `prisma db seed` creates the
+    permissions, platform org and role; then
+    `PLATFORM_OPERATOR_EMAIL=… PLATFORM_OPERATOR_PASSWORD=… pnpm --filter
+    @cbp/api exec ts-node prisma/create-platform-operator.ts` creates the
+    first operator, who must sign in and enroll MFA via the API
+    (`/auth/mfa/enroll/*`; there is no MFA-enrollment screen yet).
+  - **UI** (`apps/admin`, Next.js): sign-in with MFA step, platform stats
+    dashboard, organizations table with approve/suspend/reactivate/close
+    (reason dialog), and a cross-organization audit view. Hiding nav/buttons
+    is cosmetic; the API enforces every permission. The session cookie is
+    `SameSite=Strict`, so the admin app and API must share a site (fine on
+    `localhost`; in production, put both behind one domain). The admin
+    portal is intentionally **not** deployed to GitHub Pages.
+  - **Not covered:** the security-events and per-organization limits
+    screens mentioned in architecture §16, organization detail/user
+    management screens, an MFA-enrollment UI, and a customer-facing
+    "your application was rejected/closed" notification. I could not run the
+    API or the UI against a live server in this sandbox (no generated Prisma
+    client), so the endpoints are covered by mocked-Prisma unit tests and
+    the migration by raw SQL on live Postgres — not by an end-to-end run.
+
+Scheduled one-off payments (`Payment.scheduledFor`) and the customer-facing
+web app are not yet built (Phase 14+).
 
 > **Note on Phase 7's origin:** most of `BeneficiariesService`, its DTOs,
 > and the schema/migration adding `createdByUserId`/`verifiedByUserId`/
@@ -208,7 +262,7 @@ the frontends are not yet built (Phases 13+).
 > generated Prisma client exists and, only then, stubs `@prisma/client`
 > and turns off ts-jest type diagnostics, so the mocked-Prisma unit specs
 > run even where `binaries.prisma.sh` is blocked. This restored the six
-> suites Phase 11 found unrunnable (**125 passing across 13 suites** now).
+> suites Phase 11 found unrunnable (**159 passing across 16 suites** now).
 > With a real generated client nothing changes: full type-checking, no
 > stub. Trade-off: in a stubbed environment the specs no longer
 > type-check against the schema, so run `tsc` and the integration suites

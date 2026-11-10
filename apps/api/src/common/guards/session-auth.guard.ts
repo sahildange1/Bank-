@@ -33,6 +33,7 @@ export class SessionAuthGuard implements CanActivate {
     const user = await this.prisma.user.findUnique({
       where: { id: session.userId },
       include: {
+        organization: { select: { status: true } },
         userRoles: {
           include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
         },
@@ -40,6 +41,12 @@ export class SessionAuthGuard implements CanActivate {
     });
 
     if (!user || user.status !== 'ACTIVE') {
+      throw new UnauthorizedException();
+    }
+    // Defense in depth for Phase 13: suspending/closing an organization also
+    // revokes its sessions, but a session must never outlive that state even
+    // if a revoke were missed.
+    if (user.organization.status !== 'ACTIVE') {
       throw new UnauthorizedException();
     }
 

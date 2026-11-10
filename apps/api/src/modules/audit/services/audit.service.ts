@@ -181,6 +181,30 @@ export class AuditService {
     return rows;
   }
 
+  /**
+   * Phase 13: the one sanctioned cross-tenant read of the audit trail, for
+   * platform operators (AdminController, behind PlatformOperatorGuard +
+   * platform.audit.read). Uses the raw client on purpose; the optional
+   * `organizationId` filter exists only on this path.
+   */
+  async queryEventsPlatform(
+    filters: QueryAuditEventsDto & { organizationId?: string },
+  ): Promise<QueryAuditEventsResult> {
+    const take = filters.limit ?? 50;
+    const where = this.buildWhere(filters);
+    if (filters.organizationId) where.organizationId = filters.organizationId;
+
+    const rows = await this.prisma.auditEvent.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: take + 1,
+      ...(filters.cursor ? { cursor: { id: filters.cursor }, skip: 1 } : {}),
+    });
+    const hasMore = rows.length > take;
+    const page = hasMore ? rows.slice(0, take) : rows;
+    return { events: page, nextCursor: hasMore ? page[page.length - 1].id : null };
+  }
+
   private buildWhere(filters: QueryAuditEventsDto): Record<string, unknown> {
     const where: Record<string, unknown> = {};
     if (filters.actorId) where.actorId = filters.actorId;
