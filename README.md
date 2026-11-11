@@ -9,7 +9,7 @@ data model, and phased implementation plan.
 
 ## Status
 
-Phases 1–13 of the phased plan (`docs/architecture/phase1-architecture.md`
+Phases 1–14 of the phased plan (`docs/architecture/phase1-architecture.md`
 §14) are implemented:
 
 - **Phase 2** — monorepo scaffolding
@@ -196,8 +196,54 @@ Phases 1–13 of the phased plan (`docs/architecture/phase1-architecture.md`
     client), so the endpoints are covered by mocked-Prisma unit tests and
     the migration by raw SQL on live Postgres — not by an end-to-end run.
 
+- **Phase 14** — testing and the CI gate. The headline result: **CI
+  (`.github/workflows/ci.yml`) now runs the whole suite on every push
+  against a real generated Prisma client and a real Postgres**, which no
+  earlier phase could do in the build sandbox. Its first run found real
+  defects that mocked tests had hidden for several phases, all fixed here:
+  - the API **could not start**: `GuardsModule` didn't re-export
+    `AuthModule`, so `SessionAuthGuard` couldn't resolve `SessionService`
+    in any feature module (now covered by `src/test/app-wiring.spec.ts`,
+    which resolves the real `AppModule` graph with no database);
+  - `main.ts` default-imported `cookie-parser` with no `esModuleInterop`,
+    which is `undefined` at runtime (second boot crash);
+  - every response containing a money column (`BigInt`) would have thrown
+    during JSON serialization; a `BigIntSerializerInterceptor` now returns
+    exact decimal strings;
+  - 4 tenant-scoped `create` calls didn't type-check against the schema
+    (first real `tsc` run); and 3 of 7 integration suites had never run
+    (stale DI providers, a fake audit actor that violated a foreign key,
+    teardown in the wrong order).
+  - Behavior change: **self-signup now creates `PENDING` organizations**
+    (architecture decision #2). Before this, signup activated instantly and
+    Phase 13's approve action had nothing to do.
+  - New tests: a route-guard sweep (every route of every controller must
+    require a session and a declared permission unless explicitly
+    allow-listed — a new unguarded route fails the build); HTTP-level
+    supertest suites using the real guards, validation pipe and error
+    filter; `PermissionsGuard`/`SessionAuthGuard` specs; and a real-database
+    end-to-end journey (`apps/api/test/maker-checker.e2e-spec.ts`): signup →
+    operator approval → maker/checker payment → audit → notifications →
+    suspension, with the negative cases from §16 (cross-organization access,
+    maker approving own payment, duplicate submission, invalid transitions).
+  - **CI status when this phase landed:** typecheck, 296 unit/HTTP tests,
+    27 integration tests and 5 e2e tests all pass; web and admin build.
+  - **Not done, on purpose or by necessity:** (1) *"limit exceeded"* is in
+    the §16 negative list but **per-payment/daily limits don't exist yet**
+    (no model, no enforcement), so there is nothing to test — it needs a
+    feature phase first; (2) **browser E2E (Playwright)** isn't written
+    because the customer web app is still a placeholder; only the admin
+    screens exist, and they were type-checked and built, not driven;
+    (3) the e2e disables only the rate limiter (≈100 requests from one IP
+    would trip it), so rate-limit behavior itself is untested; (4) MFA
+    enrollment in e2e is stood in by a database row — the TOTP code path is
+    covered by unit tests only; (5) the invite token is still printed to the
+    server log (`console.log` in `UsersService.inviteUser`, a Phase 5
+    placeholder): a credential-equivalent in logs, to be replaced with email
+    delivery before any real deployment.
+
 Scheduled one-off payments (`Payment.scheduledFor`) and the customer-facing
-web app are not yet built (Phase 14+).
+web app are not yet built (Phase 15+).
 
 > **Note on Phase 7's origin:** most of `BeneficiariesService`, its DTOs,
 > and the schema/migration adding `createdByUserId`/`verifiedByUserId`/
@@ -262,7 +308,7 @@ web app are not yet built (Phase 14+).
 > generated Prisma client exists and, only then, stubs `@prisma/client`
 > and turns off ts-jest type diagnostics, so the mocked-Prisma unit specs
 > run even where `binaries.prisma.sh` is blocked. This restored the six
-> suites Phase 11 found unrunnable (**159 passing across 16 suites** now).
+> suites Phase 11 found unrunnable (**296 unit tests (23 suites), plus 27 integration and 5 e2e tests that run in CI** now).
 > With a real generated client nothing changes: full type-checking, no
 > stub. Trade-off: in a stubbed environment the specs no longer
 > type-check against the schema, so run `tsc` and the integration suites
