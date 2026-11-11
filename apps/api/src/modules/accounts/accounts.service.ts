@@ -21,7 +21,7 @@ export class AccountsService {
     const accountNumber = await this.generateUniqueAccountNumber();
 
     const account = await scoped.account.create({
-      data: { accountNumber, currency: dto.currency, status: 'ACTIVE' },
+      data: { organizationId, accountNumber, currency: dto.currency, status: 'ACTIVE' },
     });
 
     await this.auditService.record({

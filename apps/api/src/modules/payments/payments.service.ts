@@ -70,6 +70,7 @@ export class PaymentsService {
 
     const payment = await scoped.payment.create({
       data: {
+        organizationId, // also injected/verified by the tenant extension
         sourceAccountId: dto.sourceAccountId,
         beneficiaryId: dto.beneficiaryId,
         createdByUserId: actorUserId,

@@ -42,6 +42,7 @@ export class BeneficiariesService {
 
     const beneficiary = await scoped.beneficiary.create({
       data: {
+        organizationId, // also injected/verified by the tenant extension
         name: dto.name,
         accountNumber: dto.accountNumber,
         bankIdentifier: dto.bankIdentifier,

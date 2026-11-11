@@ -58,6 +58,7 @@ export class UsersService {
 
     const user = await scoped.user.create({
       data: {
+        organizationId, // also injected/verified by the tenant extension
         email: dto.email,
         passwordHash: placeholderHash,
         status: 'INVITED',
