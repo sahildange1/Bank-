@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { TenantPrismaService } from '../../common/prisma/tenant-prisma.service';
 import { AuditService } from '../audit/services/audit.service';
 import { PasswordService } from '../auth/services/password.service';
+import { TotpService } from '../auth/services/totp.service';
 import { ChallengeTokenService } from '../auth/services/challenge-token.service';
 import { SessionService } from '../auth/services/session.service';
 import { AuthService } from '../auth/auth.service';
@@ -41,6 +42,7 @@ describe('Organizations & Users (integration)', () => {
         TenantPrismaService,
         AuditService,
         PasswordService,
+        TotpService,
         ChallengeTokenService,
         SessionService,
         AuthService,

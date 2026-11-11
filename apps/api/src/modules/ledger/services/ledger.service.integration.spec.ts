@@ -24,6 +24,7 @@ describe('LedgerService (integration)', () => {
   let orgId: string;
   let acctAId: string;
   let acctBId: string;
+  let actorId: string;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -35,6 +36,11 @@ describe('LedgerService (integration)', () => {
 
     const org = await prisma.organization.create({ data: { legalName: 'Ledger Test Co', status: 'ACTIVE' } });
     orgId = org.id;
+    // audit_events.actorId is a real foreign key to users, so the actor must exist.
+    const actor = await prisma.user.create({
+      data: { organizationId: orgId, email: `ledger-actor-${Date.now()}@test.local`, passwordHash: 'x', status: 'ACTIVE' },
+    });
+    actorId = actor.id;
     const acctA = await prisma.account.create({
       data: { organizationId: orgId, accountNumber: 'LEDGER-A', currency: 'USD', balanceMinorUnits: 10_000n },
     });
@@ -49,6 +55,7 @@ describe('LedgerService (integration)', () => {
     await prisma.ledgerEntry.deleteMany({});
     await prisma.ledgerEntryGroup.deleteMany({ where: { organizationId: orgId } });
     await prisma.account.deleteMany({ where: { organizationId: orgId } });
+    await prisma.user.deleteMany({ where: { organizationId: orgId } });
     await prisma.organization.delete({ where: { id: orgId } });
     await prisma.$disconnect();
   });
@@ -56,7 +63,7 @@ describe('LedgerService (integration)', () => {
   it('posts a balanced transfer and updates both account balances correctly', async () => {
     const result = await ledgerService.postDoubleEntry({
       organizationId: orgId,
-      actorUserId: 'test-actor',
+      actorUserId: actorId,
       description: 'Test transfer',
       idempotencyKey: 'test-key-1',
       entries: [
@@ -85,7 +92,7 @@ describe('LedgerService (integration)', () => {
   it('is idempotent: reposting with the same idempotencyKey returns the existing group without double-applying', async () => {
     const result = await ledgerService.postDoubleEntry({
       organizationId: orgId,
-      actorUserId: 'test-actor',
+      actorUserId: actorId,
       description: 'Test transfer (repeat)',
       idempotencyKey: 'test-key-1', // same key as the previous test
       entries: [
@@ -104,7 +111,7 @@ describe('LedgerService (integration)', () => {
     await expect(
       ledgerService.postDoubleEntry({
         organizationId: orgId,
-        actorUserId: 'test-actor',
+        actorUserId: actorId,
         description: 'Overdraw attempt',
         idempotencyKey: 'test-key-overdraw',
         entries: [
@@ -122,7 +129,7 @@ describe('LedgerService (integration)', () => {
     await expect(
       ledgerService.postDoubleEntry({
         organizationId: orgId,
-        actorUserId: 'test-actor',
+        actorUserId: actorId,
         description: 'Unbalanced posting',
         idempotencyKey: 'test-key-unbalanced',
         entries: [
@@ -142,7 +149,7 @@ describe('LedgerService (integration)', () => {
     await expect(
       ledgerService.postDoubleEntry({
         organizationId: orgId, // caller claims to be orgId...
-        actorUserId: 'test-actor',
+        actorUserId: actorId,
         description: 'Cross-org attempt',
         idempotencyKey: 'test-key-cross-org',
         entries: [
@@ -176,7 +183,7 @@ describe('LedgerService (integration)', () => {
 
     const result = await ledgerService.postDoubleEntry({
       organizationId: orgId,
-      actorUserId: 'test-actor',
+      actorUserId: actorId,
       description: 'Simulated payment execution',
       idempotencyKey: `settlement-smoke-${Date.now()}`,
       entries: [
