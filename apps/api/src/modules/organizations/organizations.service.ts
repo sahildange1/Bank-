@@ -19,12 +19,16 @@ export class OrganizationsService {
   ) {}
 
   /**
-   * Self-service signup, resolving the Phase 1 open question (§18 #2)
-   * pragmatically for this prototype: the organization is created ACTIVE
-   * immediately rather than gated behind a manual admin-approval queue.
-   * `OrgStatus` still has PENDING/SUSPENDED/CLOSED for when the Admin
-   * Portal (Phase 13) adds a real approval/suspension workflow — this
-   * doesn't foreclose that, it just doesn't block on it existing yet.
+   * Self-service signup + admin approval (architecture decision #2). The
+   * organization is created PENDING: nobody in it can sign in until a
+   * platform operator approves it (Phase 13, POST
+   * /admin/organizations/:id/approve) — login and SessionAuthGuard both
+   * refuse any organization that is not ACTIVE.
+   *
+   * History: Phases 5-12 created organizations ACTIVE immediately because no
+   * approval workflow existed yet. Phase 13 built it, and Phase 14's
+   * end-to-end tests showed signup still bypassed it, so this now follows
+   * the architecture.
    */
   async createOrganization(dto: CreateOrganizationDto) {
     const existingAdmin = await this.prisma.user.findFirst({ where: { email: dto.adminEmail } });
@@ -37,7 +41,7 @@ export class OrganizationsService {
     const passwordHash = await this.passwordService.hash(dto.adminPassword);
 
     const organization = await this.prisma.organization.create({
-      data: { legalName: dto.legalName, status: 'ACTIVE' },
+      data: { legalName: dto.legalName, status: 'PENDING' },
     });
 
     // Materialize this org's default roles from the shared template, then

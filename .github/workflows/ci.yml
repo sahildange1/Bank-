@@ -1,0 +1,86 @@
+# CI gate (architecture §16): no merge if any of this fails. Nothing here is
+# allowed to `continue-on-error` — a red step is a real failure to fix, not
+# something to skip. This is also the only place the whole suite runs against
+# a real generated Prisma client and a real Postgres.
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API (typecheck, unit, integration, e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: corporate_banking_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/corporate_banking_test?schema=public
+      # Throwaway values for this CI database only; never reuse real secrets here.
+      JWT_ACCESS_SECRET: ci-only-jwt-secret-0123456789abcdef0123456789
+      MFA_ENCRYPTION_KEY: ci-only-mfa-key-0123456789abcdef0123456789
+      SESSION_SECRET: ci-only-session-secret-0123456789abcdef
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile
+      - name: Generate Prisma client
+        run: pnpm --filter @cbp/api exec prisma generate
+      - name: Typecheck (tsc, no emit)
+        run: pnpm --filter @cbp/api exec tsc --noEmit -p tsconfig.json
+      - name: Unit + HTTP-level tests
+        run: pnpm --filter @cbp/api exec jest --config jest.config.js
+      - name: Apply migrations
+        run: pnpm --filter @cbp/api exec prisma migrate deploy
+      - name: Seed permissions and platform organization
+        run: pnpm --filter @cbp/api exec prisma db seed
+      - name: Integration tests (real Postgres)
+        # --runInBand: several suites clean up with unscoped deleteMany, so they must not share the DB concurrently.
+        run: pnpm --filter @cbp/api exec jest --config jest.integration.config.js --runInBand
+      - name: Re-seed (integration cleanup may remove seed-adjacent rows)
+        run: pnpm --filter @cbp/api exec prisma db seed
+      - name: End-to-end journey (real HTTP + Postgres)
+        run: pnpm --filter @cbp/api exec jest --config ./test/jest-e2e.json --runInBand
+
+  web:
+    name: Web and admin (typecheck, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+      - run: pnpm install --no-frozen-lockfile --ignore-scripts
+      - run: pnpm --filter @cbp/web exec tsc --noEmit
+      - run: pnpm --filter @cbp/admin exec tsc --noEmit
+      - run: pnpm --filter @cbp/web build
+      - run: pnpm --filter @cbp/admin build

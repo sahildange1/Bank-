@@ -78,6 +78,13 @@ describe('Organizations & Users (integration)', () => {
     });
     createdOrgIds.push(organizationId);
 
+    // Signup is gated behind platform-operator approval (architecture decision #2).
+    const org = await prisma.organization.findUnique({ where: { id: organizationId } });
+    expect(org?.status).toEqual('PENDING');
+    await expect(authService.login({ email: 'admin@acme.test', password: 'correct-horse-battery' })).rejects.toThrow(
+      /not currently active/,
+    );
+
     const roles = await prisma.role.findMany({
       where: { organizationId },
       include: { rolePermissions: { include: { permission: true } } },
@@ -102,6 +109,8 @@ describe('Organizations & Users (integration)', () => {
       adminPassword: 'correct-horse-battery',
     });
     createdOrgIds.push(organizationId);
+    // Stand-in for a platform operator's approval (see AdminService.changeStatus).
+    await prisma.organization.update({ where: { id: organizationId }, data: { status: 'ACTIVE' } });
 
     const { userId } = await usersService.inviteUser(organizationId, adminUserId, {
       email: 'maker@globex.test',
@@ -141,6 +150,10 @@ describe('Organizations & Users (integration)', () => {
     });
     createdOrgIds.push(organizationId);
 
+    await prisma.organization.update({ where: { id: organizationId }, data: { status: 'ACTIVE' } });
+    await expect(
+      authService.login({ email: 'admin@initech.test', password: 'correct-horse-battery' }),
+    ).resolves.toBeDefined(); // control: an ACTIVE org can sign in
     await prisma.organization.update({ where: { id: organizationId }, data: { status: 'SUSPENDED' } });
 
     await expect(
