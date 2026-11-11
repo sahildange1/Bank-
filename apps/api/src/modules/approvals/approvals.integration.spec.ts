@@ -85,6 +85,7 @@ describe('ApprovalsService (integration)', () => {
     await prisma.payment.deleteMany({ where: { organizationId: orgId } });
     await prisma.approvalPolicy.deleteMany({ where: { organizationId: orgId } });
     await prisma.account.deleteMany({ where: { organizationId: orgId } });
+    await prisma.beneficiary.deleteMany({ where: { organizationId: orgId } });
     await prisma.notification.deleteMany({ where: { organizationId: orgId } });
     await prisma.user.deleteMany({ where: { organizationId: orgId } });
     await prisma.organization.delete({ where: { id: orgId } });

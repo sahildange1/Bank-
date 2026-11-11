@@ -67,6 +67,7 @@ describe('Organizations & Users (integration)', () => {
     await prisma.rolePermission.deleteMany({ where: { role: { organizationId: { in: createdOrgIds } } } });
     await prisma.role.deleteMany({ where: { organizationId: { in: createdOrgIds } } });
     await prisma.session.deleteMany({});
+    await prisma.approvalPolicy.deleteMany({ where: { organizationId: { in: createdOrgIds } } });
     await prisma.user.deleteMany({ where: { organizationId: { in: createdOrgIds } } });
     await prisma.organization.deleteMany({ where: { id: { in: createdOrgIds } } });
     await prisma.$disconnect();

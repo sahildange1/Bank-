@@ -195,7 +195,7 @@ describe('LedgerService (integration)', () => {
 
     const reloaded = await prisma.account.findUnique({ where: { id: settlement.id } });
     expect(reloaded?.balanceMinorUnits).toEqual(1000n);
-
-    await prisma.account.delete({ where: { id: settlement.id } });
+    // No per-test delete: ledger entries reference this account, so afterAll
+    // (which clears entries first) removes it with the rest of the org's accounts.
   });
 });
