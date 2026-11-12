@@ -19,9 +19,18 @@ const COLUMNS = [
   'metadata',
 ] as const;
 
+// Spreadsheet apps treat a cell starting with one of these as a formula
+// (=HYPERLINK(...), +cmd|..., @SUM(...)): "CSV injection". Several audit
+// columns hold attacker-controlled text (user agent, resource ids, metadata),
+// so such cells are neutralised with a leading apostrophe, which spreadsheets
+// render as plain text. Tab and carriage return are included because some
+// apps strip leading whitespace before evaluating.
+const FORMULA_TRIGGER = /^[=+\-@\t\r]/;
+
 function escapeCsvField(value: unknown): string {
   if (value === null || value === undefined) return '';
-  const str = typeof value === 'string' ? value : JSON.stringify(value);
+  let str = typeof value === 'string' ? value : JSON.stringify(value);
+  if (typeof value === 'string' && FORMULA_TRIGGER.test(str)) str = `'${str}`;
   if (/[",\n\r]/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`;
   }

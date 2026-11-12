@@ -55,4 +55,11 @@ describe('auditEventsToCsv', () => {
     const csv = auditEventsToCsv([]);
     expect(csv.split('\r\n').filter(Boolean)).toHaveLength(1);
   });
+
+  it.each(['=cmd|calc', '+1+1', '-2+3', '@SUM(A1)', '\tTAB'])('neutralises spreadsheet formula trigger %j', (v) => {
+    const csv = auditEventsToCsv([{ ...BASE_EVENT, userAgent: v }]);
+    const row = csv.split('\r\n')[1];
+    expect(row).toContain(`'${v}`.replace(/"/g, '""'));
+    expect(row).not.toMatch(new RegExp(`(^|,)"?${v.replace(/[|+@()$]/g, '\\$&')}`));
+  });
 });

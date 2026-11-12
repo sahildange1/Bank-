@@ -446,3 +446,26 @@ docs/architecture/     Architecture, ER diagram, schema, and phased plan
 
 See `docs/architecture/phase1-architecture.md` §14. Each phase is implemented,
 tested, and explicitly approved before the next begins.
+
+## Phase 15 — Security hardening
+
+**Scope:** sandbox hardening only; nothing here is a legal/regulatory compliance claim.
+
+| Area | What was done |
+|---|---|
+| Dependencies | Next 14→15.5, React 19, `pnpm.overrides` for transitive advisories. `pnpm audit --prod`: 54 vulns (3 critical / 23 high) → 1 moderate. CI now blocks on high+. |
+| Config | `validateEnvironment()` fails startup (names variables, never values): secret length, placeholders, distinct keys, CORS origins (https + no wildcard in prod), dev flags refused in prod. |
+| HTTP | Strict helmet (CSP `default-src 'none'`, `frame-ancestors 'none'`, no-referrer, HSTS in prod), `Cache-Control: no-store`, Swagger off in prod, `x-powered-by` removed, trust-proxy by explicit hop count. |
+| CSRF | Cookies are `SameSite=Strict`; additionally an Origin/Referer allow-list check on every state-changing request. |
+| Logging | Structured access log with request id; never logs query strings, bodies, headers or cookies. Invite/reset tokens are no longer printed unless `DEV_LOG_INVITE_TOKENS=true` outside production. |
+| Input | Max lengths on passwords/tokens, array bounds on role lists, CSV formula-injection guard on audit export, test forbidding `$queryRawUnsafe`/`$executeRawUnsafe` and non-tagged raw SQL. |
+| Privilege escalation | A user manager can no longer grant, remove or disable roles carrying permissions they don't hold, and can't change their own roles. |
+| Races | Real-Postgres tests: 20 concurrent debits against a balance for 10 succeed exactly 10; same idempotency key concurrently applies once. |
+| Frontend | CSP / frame / nosniff / referrer / permissions headers in `apps/admin` and `apps/web` (skipped for the static GitHub Pages export, which can't set headers). |
+
+**Known residual risks / trade-offs**
+- `@nestjs/core` ≤ 11.1.17 advisory (moderate) needs a Nest 11 major upgrade; deliberately deferred.
+- Login lockout messaging allows account enumeration and lockout-DoS of a known account.
+- Next CSP needs `'unsafe-inline'` for scripts (nonce CSP would force dynamic rendering).
+- SSRF: the API makes no outbound HTTP calls from user input today; revisit when webhooks/object storage are added.
+- Rate limiting is in-process (per instance), not shared.

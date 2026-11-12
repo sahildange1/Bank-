@@ -9,7 +9,10 @@ import * as path from 'path';
  * Nothing exercised main.ts, so it went unnoticed for several phases.
  */
 describe('main.ts bootstrap imports', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'main.ts'), 'utf8');
+  // Bootstrap wiring lives in app.setup.ts (shared with tests) and main.ts.
+  const source = ['main.ts', 'app.setup.ts']
+    .map((f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8'))
+    .join('\n');
 
   it('imports cookie-parser as a namespace (callable under this tsconfig)', () => {
     expect(source).toMatch(/import \* as cookieParser from 'cookie-parser'/);

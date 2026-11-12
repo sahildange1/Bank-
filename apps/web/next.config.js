@@ -4,9 +4,40 @@
 const isPages = process.env.GITHUB_PAGES === 'true';
 const basePath = isPages ? '/Bank-' : '';
 
+// Security headers apply to the normal server build. A static export (GitHub
+// Pages demo) cannot set response headers, so they are skipped there.
+const securityHeaders = [
+  { key: 'X-Frame-Options', value: 'DENY' },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'Referrer-Policy', value: 'no-referrer' },
+  { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=()' },
+  {
+    key: 'Content-Security-Policy',
+    value: [
+      "default-src 'self'",
+      `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === 'production' ? '' : " 'unsafe-eval'"}`,
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      `connect-src 'self' ${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}`,
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join('; '),
+  },
+];
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  poweredByHeader: false,
+  ...(isPages
+    ? {}
+    : {
+        async headers() {
+          return [{ source: '/:path*', headers: securityHeaders }];
+        },
+      }),
   ...(isPages ? { output: 'export', basePath, assetPrefix: basePath, images: { unoptimized: true } } : {}),
 };
 

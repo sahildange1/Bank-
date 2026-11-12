@@ -25,7 +25,7 @@ export class UsersController {
   @UseGuards(SessionAuthGuard, PermissionsGuard)
   @RequirePermissions('users.manage')
   invite(@CurrentUser() user: AuthContext, @Body() dto: InviteUserDto) {
-    return this.usersService.inviteUser(user.organizationId, user.userId, dto);
+    return this.usersService.inviteUser(user.organizationId, user.userId, user.permissions, dto);
   }
 
   @Post('accept-invite')
@@ -38,20 +38,20 @@ export class UsersController {
   @UseGuards(SessionAuthGuard, PermissionsGuard)
   @RequirePermissions('users.manage')
   updateRoles(@CurrentUser() user: AuthContext, @Param('id') targetUserId: string, @Body() dto: UpdateUserRolesDto) {
-    return this.usersService.updateUserRoles(user.organizationId, user.userId, targetUserId, dto);
+    return this.usersService.updateUserRoles(user.organizationId, user.userId, user.permissions, targetUserId, dto);
   }
 
   @Post(':id/disable')
   @UseGuards(SessionAuthGuard, PermissionsGuard)
   @RequirePermissions('users.manage')
   disable(@CurrentUser() user: AuthContext, @Param('id') targetUserId: string) {
-    return this.usersService.setUserStatus(user.organizationId, user.userId, targetUserId, false);
+    return this.usersService.setUserStatus(user.organizationId, user.userId, user.permissions, targetUserId, false);
   }
 
   @Post(':id/enable')
   @UseGuards(SessionAuthGuard, PermissionsGuard)
   @RequirePermissions('users.manage')
   enable(@CurrentUser() user: AuthContext, @Param('id') targetUserId: string) {
-    return this.usersService.setUserStatus(user.organizationId, user.userId, targetUserId, true);
+    return this.usersService.setUserStatus(user.organizationId, user.userId, user.permissions, targetUserId, true);
   }
 }

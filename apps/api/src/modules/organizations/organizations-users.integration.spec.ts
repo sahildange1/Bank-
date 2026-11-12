@@ -25,6 +25,9 @@ import { DEFAULT_ADMIN_ROLE_NAME, PERMISSIONS } from './constants/rbac-catalog';
  * signup -> default role provisioning -> invite -> accept -> role update ->
  * disable, plus the org-status login gate added in this phase.
  */
+// What SessionAuthGuard would load for an Organization Admin.
+const ADMIN_PERMISSIONS = PERMISSIONS.map((p) => p.key);
+
 describe('Organizations & Users (integration)', () => {
   let prisma: PrismaClient;
   let organizationsService: OrganizationsService;
@@ -115,7 +118,7 @@ describe('Organizations & Users (integration)', () => {
     // Stand-in for a platform operator's approval (see AdminService.changeStatus).
     await prisma.organization.update({ where: { id: organizationId }, data: { status: 'ACTIVE' } });
 
-    const { userId } = await usersService.inviteUser(organizationId, adminUserId, {
+    const { userId } = await usersService.inviteUser(organizationId, adminUserId, ADMIN_PERMISSIONS, {
       email: 'maker@globex.test',
       roleNames: ['Payment Maker'],
     });
@@ -134,12 +137,12 @@ describe('Organizations & Users (integration)', () => {
     expect(loginResult.session).toBeDefined();
 
     // Role change persists correctly.
-    await usersService.updateUserRoles(organizationId, adminUserId, userId, { roleNames: ['Viewer'] });
+    await usersService.updateUserRoles(organizationId, adminUserId, ADMIN_PERMISSIONS, userId, { roleNames: ['Viewer'] });
     const rolesAfter = await prisma.userRole.findMany({ where: { userId }, include: { role: true } });
     expect(rolesAfter.map((r: { role: { name: string } }) => r.role.name)).toEqual(['Viewer']);
 
     // Disabling blocks subsequent login and revokes existing sessions.
-    await usersService.setUserStatus(organizationId, adminUserId, userId, false);
+    await usersService.setUserStatus(organizationId, adminUserId, ADMIN_PERMISSIONS, userId, false);
     await expect(
       authService.login({ email: 'maker@globex.test', password: 'a-real-password-123' }),
     ).rejects.toThrow();

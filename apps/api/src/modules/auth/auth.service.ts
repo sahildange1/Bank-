@@ -1,3 +1,4 @@
+import { logDevSecret } from '../../common/dev/dev-secret-log';
 import { Injectable, UnauthorizedException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PasswordService } from './services/password.service';
@@ -250,9 +251,9 @@ export class AuthService {
     const candidates = await this.prisma.user.findMany({ where: { email: dto.email } });
     for (const user of candidates) {
       const token = this.challengeTokenService.issuePasswordReset(user.id, user.passwordHash);
-      // TODO(Phase 12): replace with NotificationsService email delivery.
-      // eslint-disable-next-line no-console
-      console.log(`[password-reset] token for ${user.email} (user ${user.id}): ${token}`);
+      // Email delivery awaits the outbox worker; see logDevSecret for the
+      // opt-in, never-in-production local fallback.
+      logDevSecret(`[password-reset] token for ${user.email} (user ${user.id}): ${token}`);
       await this.auditService.record({
         organizationId: user.organizationId,
         actorId: user.id,

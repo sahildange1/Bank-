@@ -1,50 +1,35 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
-import helmet from 'helmet';
-// Namespace import on purpose: tsconfig has no esModuleInterop, so a default import
-// of this CommonJS module is undefined at runtime and the API would crash on boot.
-import * as cookieParser from 'cookie-parser';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { configureApp } from './app.setup';
+import { assertValidEnvironment } from './common/config/env.validation';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, {
-    // Structured logging is configured in a later phase (security hardening).
-  });
+  // Fail fast on missing/weak secrets or unsafe settings, before listening.
+  assertValidEnvironment();
 
-  app.use(helmet());
-  app.use(cookieParser());
+  const app = await NestFactory.create(AppModule);
+  configureApp(app);
 
-  app.enableCors({
-    origin: (process.env.CORS_ORIGIN ?? '').split(',').filter(Boolean),
-    credentials: true,
-  });
-
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
-
-  // Global error filter and rate limiter are registered as APP_FILTER /
-  // APP_GUARD providers in AppModule so they apply uniformly, including to
+  // Global error filter, rate limiter and BigInt serializer are registered as
+  // APP_* providers in AppModule so they apply uniformly, including to
   // exceptions thrown inside guards themselves.
 
-  const config = new DocumentBuilder()
-    .setTitle('Corporate Banking Platform API')
-    .setDescription('Sandbox corporate banking API — no real money movement.')
-    .setVersion('0.1.0')
-    .addBearerAuth()
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  // The API contract is not public: docs are off in production unless
+  // explicitly enabled (and validateEnvironment forbids enabling them there).
+  if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_API_DOCS === 'true') {
+    const config = new DocumentBuilder()
+      .setTitle('Corporate Banking Platform API')
+      .setDescription('Sandbox corporate banking API — no real money movement.')
+      .setVersion('0.1.0')
+      .build();
+    SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, config));
+  }
 
   const port = process.env.API_PORT ?? 4000;
   await app.listen(port);
   // eslint-disable-next-line no-console
-  console.log(`API listening on :${port} (docs at /api/docs)`);
+  console.log(`API listening on :${port}`);
 }
 
 bootstrap();

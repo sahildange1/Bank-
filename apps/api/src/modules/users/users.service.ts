@@ -1,4 +1,5 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { logDevSecret } from '../../common/dev/dev-secret-log';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { TenantPrismaService } from '../../common/prisma/tenant-prisma.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -9,6 +10,10 @@ import { AuditService } from '../audit/services/audit.service';
 import { InviteUserDto } from './dto/invite-user.dto';
 import { AcceptInviteDto } from './dto/accept-invite.dto';
 import { UpdateUserRolesDto } from './dto/update-user-roles.dto';
+import { permissionsMissing } from './role-grant.policy';
+
+type RoleWithPermissions = { rolePermissions: Array<{ permission: { key: string } }> };
+const keysOf = (roles: RoleWithPermissions[]) => roles.flatMap((r) => r.rolePermissions.map((rp) => rp.permission.key));
 
 @Injectable()
 export class UsersService {
@@ -35,7 +40,7 @@ export class UsersService {
     });
   }
 
-  async inviteUser(organizationId: string, actorUserId: string, dto: InviteUserDto) {
+  async inviteUser(organizationId: string, actorUserId: string, actorPermissions: readonly string[], dto: InviteUserDto) {
     const scoped = this.tenantPrisma.forOrg(organizationId);
 
     const existing = await this.prisma.user.findFirst({ where: { email: dto.email } });
@@ -43,12 +48,16 @@ export class UsersService {
       throw new ConflictException('A user with this email already exists.');
     }
 
-    const roles = await scoped.role.findMany({ where: { name: { in: dto.roleNames } } });
+    const roles = await scoped.role.findMany({
+      where: { name: { in: dto.roleNames } },
+      include: { rolePermissions: { include: { permission: { select: { key: true } } } } },
+    });
     const foundNames = new Set(roles.map((r: { name: string }) => r.name));
     const missing = dto.roleNames.filter((n) => !foundNames.has(n));
     if (missing.length > 0) {
       throw new BadRequestException(`Unknown role(s): ${missing.join(', ')}`);
     }
+    this.assertMayGrant(actorPermissions, keysOf(roles));
 
     // Unusable placeholder hash — this user cannot authenticate until they
     // accept the invite and set a real password, which replaces this value
@@ -67,9 +76,9 @@ export class UsersService {
     });
 
     const token = this.challengeTokenService.issueUserInvite(user.id, placeholderHash);
-    // TODO(Phase 12): replace with NotificationsService email delivery.
-    // eslint-disable-next-line no-console
-    console.log(`[user-invite] token for ${user.email} (user ${user.id}): ${token}`);
+    // Email delivery awaits the outbox worker; see logDevSecret for the
+    // opt-in, never-in-production local fallback.
+    logDevSecret(`[user-invite] token for ${user.email} (user ${user.id}): ${token}`);
 
     await this.auditService.record({
       organizationId,
@@ -121,13 +130,27 @@ export class UsersService {
     return { success: true };
   }
 
-  async updateUserRoles(organizationId: string, actorUserId: string, targetUserId: string, dto: UpdateUserRolesDto) {
+  async updateUserRoles(
+    organizationId: string,
+    actorUserId: string,
+    actorPermissions: readonly string[],
+    targetUserId: string,
+    dto: UpdateUserRolesDto,
+  ) {
     const scoped = this.tenantPrisma.forOrg(organizationId);
 
     const target = await scoped.user.findUnique({ where: { id: targetUserId } });
     if (!target) throw new NotFoundException();
 
-    const roles = await scoped.role.findMany({ where: { name: { in: dto.roleNames } } });
+    // Changing your own roles is how a limited user would escalate themselves.
+    if (targetUserId === actorUserId) {
+      throw new ForbiddenException('You cannot change your own roles.');
+    }
+
+    const roles = await scoped.role.findMany({
+      where: { name: { in: dto.roleNames } },
+      include: { rolePermissions: { include: { permission: { select: { key: true } } } } },
+    });
     const foundNames = new Set(roles.map((r: { name: string }) => r.name));
     const missing = dto.roleNames.filter((n) => !foundNames.has(n));
     if (missing.length > 0) {
@@ -136,8 +159,12 @@ export class UsersService {
 
     const previousRoles = await this.prisma.userRole.findMany({
       where: { userId: targetUserId },
-      select: { role: { select: { name: true } } },
+      select: { role: { select: { name: true, rolePermissions: { select: { permission: { select: { key: true } } } } } } },
     });
+    // Both directions: you can't grant beyond your own permissions, and you
+    // can't strip (demote) someone who holds more than you do.
+    this.assertMayGrant(actorPermissions, keysOf(roles));
+    this.assertMayGrant(actorPermissions, keysOf(previousRoles.map((r: { role: RoleWithPermissions }) => r.role)));
 
     await this.prisma.$transaction([
       this.prisma.userRole.deleteMany({ where: { userId: targetUserId } }),
@@ -159,7 +186,13 @@ export class UsersService {
     return { userId: targetUserId, roles: dto.roleNames };
   }
 
-  async setUserStatus(organizationId: string, actorUserId: string, targetUserId: string, active: boolean) {
+  async setUserStatus(
+    organizationId: string,
+    actorUserId: string,
+    actorPermissions: readonly string[],
+    targetUserId: string,
+    active: boolean,
+  ) {
     const scoped = this.tenantPrisma.forOrg(organizationId);
 
     const target = await scoped.user.findUnique({ where: { id: targetUserId } });
@@ -168,6 +201,13 @@ export class UsersService {
     if (targetUserId === actorUserId && !active) {
       throw new BadRequestException('You cannot disable your own account.');
     }
+
+    // A user manager must not be able to lock out an admin more powerful than themselves.
+    const targetRoles = await this.prisma.userRole.findMany({
+      where: { userId: targetUserId },
+      select: { role: { select: { rolePermissions: { select: { permission: { select: { key: true } } } } } } },
+    });
+    this.assertMayGrant(actorPermissions, keysOf(targetRoles.map((r: { role: RoleWithPermissions }) => r.role)));
 
     await scoped.user.update({
       where: { id: targetUserId },
@@ -187,6 +227,13 @@ export class UsersService {
     });
 
     return { userId: targetUserId, status: active ? 'ACTIVE' : 'DISABLED' };
+  }
+
+  private assertMayGrant(actorPermissions: readonly string[], needed: string[]) {
+    const missing = permissionsMissing(actorPermissions, needed);
+    if (missing.length > 0) {
+      throw new ForbiddenException('You cannot assign, remove or modify roles that carry permissions you do not hold.');
+    }
   }
 
   private peekUnverifiedUserId(token: string): string | null {

@@ -13,10 +13,10 @@
  * Only the ThrottlerGuard is overridden (a ~100-request journey from one IP
  * would trip it); every other guard, pipe, filter and interceptor is real.
  */
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { Test } from '@nestjs/testing';
-import * as cookieParser from 'cookie-parser';
+import { configureApp } from '../src/app.setup';
 import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
@@ -75,14 +75,27 @@ describe('maker-checker journey (e2e, real database)', () => {
     return organizationId;
   }
 
+  it('hardening: security headers, request id echo, no-store, and cross-origin writes refused', async () => {
+    const res = await request(server).get('/nonexistent-probe').set('x-request-id', 'e2e-request-1234');
+    expect(res.headers['x-request-id']).toBe('e2e-request-1234');
+    expect(res.headers['cache-control']).toContain('no-store');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+    expect(res.headers['x-powered-by']).toBeUndefined();
+
+    const evil = await request(server).post('/auth/login').set('Origin', 'https://evil.example').send({ email: 'a@b.co', password: 'x' });
+    expect(evil.status).toBe(403);
+  });
+
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideGuard(ThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
     app = moduleRef.createNestApplication();
-    app.use(cookieParser());
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+    // Same hardening as production (helmet, request id, Origin check, no-store, pipes).
+    process.env.CORS_ORIGIN ??= 'http://localhost:3000';
+    configureApp(app);
     app.useGlobalFilters(new HttpExceptionFilter());
     await app.init();
     server = app.getHttpServer();

@@ -1,7 +1,8 @@
-import { IsString, Length, Matches } from 'class-validator';
+import { IsString, Length, Matches, MaxLength } from 'class-validator';
 
 export class VerifyMfaDto {
   @IsString()
+  @MaxLength(1024)
   challengeId!: string;
 
   @IsString()
