@@ -1,0 +1,96 @@
+# Production-shaped stack. Secrets come from the environment / an env file you
+# manage outside git (see docs/deployment.md); every required value uses
+# ${VAR:?} so a missing secret stops `compose up` instead of starting with a default.
+#
+#   docker compose -f infra/docker-compose.prod.yml --env-file prod.env up -d --build
+#
+# Ports bind to 127.0.0.1: put a TLS-terminating reverse proxy in front.
+# TLS, backups, and secret storage are the operator's responsibility.
+name: cbp
+
+x-api: &api
+  build:
+    context: ..
+    dockerfile: infra/docker/api.prod.Dockerfile
+    target: api
+  restart: unless-stopped
+  environment: &api-env
+    NODE_ENV: production
+    API_PORT: 4000
+    DATABASE_URL: postgresql://cbp:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/corporate_banking?schema=public
+    JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET}
+    MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:?set MFA_ENCRYPTION_KEY}
+    CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN (https origins, comma separated)}
+    TRUST_PROXY: ${TRUST_PROXY:-1}
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  depends_on:
+    postgres: { condition: service_healthy }
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cbp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: corporate_banking
+    volumes: [pg_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cbp -d corporate_banking"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No published port: only the compose network can reach the database.
+
+  migrate:
+    <<: *api
+    restart: "no"
+    command: ["./node_modules/.bin/prisma", "migrate", "deploy"]
+    healthcheck: { disable: true }
+
+  api:
+    <<: *api
+    ports: ["127.0.0.1:${API_PORT:-4000}:4000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+
+  # Exactly ONE replica: background jobs are not row-locked (see worker.ts).
+  worker:
+    <<: *api
+    command: ["node", "dist/worker.js"]
+    healthcheck: { disable: true }
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    deploy: { replicas: 1 }
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/docker/next.prod.Dockerfile
+      args: { APP: web, NEXT_PUBLIC_API_URL: "${PUBLIC_API_URL:?set PUBLIC_API_URL}" }
+    restart: unless-stopped
+    ports: ["127.0.0.1:${WEB_PORT:-3000}:3000"]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  admin:
+    build:
+      context: ..
+      dockerfile: infra/docker/next.prod.Dockerfile
+      args: { APP: admin, NEXT_PUBLIC_API_URL: "${PUBLIC_API_URL:?set PUBLIC_API_URL}" }
+    restart: unless-stopped
+    ports: ["127.0.0.1:${ADMIN_PORT:-3001}:3000"]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  pg_data:

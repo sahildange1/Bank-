@@ -32,10 +32,16 @@ const securityHeaders = [
   ...(isProd ? [{ key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' }] : []),
 ];
 
+const path = require('path');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // Container build: self-contained server in .next/standalone (monorepo root traced).
+  ...(process.env.NEXT_STANDALONE === 'true'
+    ? { output: 'standalone', outputFileTracingRoot: path.join(__dirname, '../../') }
+    : {}),
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
   },

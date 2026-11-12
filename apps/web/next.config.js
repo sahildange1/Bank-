@@ -27,10 +27,14 @@ const securityHeaders = [
   },
 ];
 
+const path = require('path');
+const standalone = process.env.NEXT_STANDALONE === 'true' && !isPages;
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  ...(standalone ? { output: 'standalone', outputFileTracingRoot: path.join(__dirname, '../../') } : {}),
   ...(isPages
     ? {}
     : {

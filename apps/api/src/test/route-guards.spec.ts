@@ -20,6 +20,9 @@ const PUBLIC = new Set([
   'AuthController.resetPassword',
   'OrganizationsController.signUp',
   'UsersController.acceptInvite',
+  // Orchestrator probes: no data returned, see health.controller.ts.
+  'HealthController.live',
+  'HealthController.ready',
 ]);
 
 // Authenticated-only on purpose: every signed-in user may act on their OWN session/inbox.

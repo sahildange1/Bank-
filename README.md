@@ -469,3 +469,13 @@ tested, and explicitly approved before the next begins.
 - Next CSP needs `'unsafe-inline'` for scripts (nonce CSP would force dynamic rendering).
 - SSRF: the API makes no outbound HTTP calls from user input today; revisit when webhooks/object storage are added.
 - Rate limiting is in-process (per instance), not shared.
+
+## Phase 16 — Deployment
+
+Production-shaped, still sandbox. See [`docs/deployment.md`](docs/deployment.md) for the runbook.
+
+- `infra/docker/api.prod.Dockerfile` (lean non-root API/worker image + `tools` target for seeding) and `infra/docker/next.prod.Dockerfile` (web/admin standalone builds); dev Dockerfiles and `infra/docker-compose.yml` are unchanged.
+- `infra/docker-compose.prod.yml`: postgres (unpublished), one-shot `migrate`, `api`, single `worker`, `web`, `admin`; required secrets use `${VAR:?}` so nothing starts with a default; read-only filesystems, dropped capabilities, loopback-only ports.
+- New `GET /health/live` and `/health/ready` (no detail on failure); worker process (`src/worker.ts`) runs email-outbox dispatch and hourly ledger reconciliation via a non-overlapping, drain-on-shutdown job runner.
+- CI `deploy-smoke` job builds every image, migrates a real Postgres, boots the stack, and checks readiness, HSTS/nosniff/no-store headers, Swagger disabled, worker logs, and web/admin frame headers.
+- `prisma` CLI moved to runtime dependencies so the image can run `migrate deploy`.

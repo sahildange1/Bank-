@@ -86,3 +86,45 @@ jobs:
       - run: pnpm --filter @cbp/admin exec tsc --noEmit
       - run: pnpm --filter @cbp/web build
       - run: pnpm --filter @cbp/admin build
+
+  deploy-smoke:
+    name: Production images (build, migrate, boot, health)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Throwaway secrets for this run only
+        run: |
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "JWT_ACCESS_SECRET=$(openssl rand -hex 32)"
+            echo "MFA_ENCRYPTION_KEY=$(openssl rand -hex 32)"
+            echo "CORS_ORIGIN=https://app.example.test"
+            echo "PUBLIC_API_URL=https://api.example.test"
+          } > smoke.env
+      - name: Build all images
+        run: docker compose -f infra/docker-compose.prod.yml --env-file smoke.env build
+      - name: Migrate, then start API, worker and database
+        run: docker compose -f infra/docker-compose.prod.yml --env-file smoke.env up -d --wait --wait-timeout 120 api worker
+      - name: Readiness and hardening headers
+        run: |
+          curl -fsS http://127.0.0.1:4000/health/ready
+          curl -fsSI http://127.0.0.1:4000/health/live | tee headers.txt
+          grep -qi "x-content-type-options: nosniff" headers.txt
+          grep -qi "strict-transport-security" headers.txt
+          grep -qi "no-store" headers.txt
+          ! grep -qi "x-powered-by" headers.txt
+          # Swagger must be off in production.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/api/docs)" = "404"
+      - name: Worker is running and logging
+        run: |
+          sleep 5
+          docker compose -f infra/docker-compose.prod.yml --env-file smoke.env logs worker | grep '"job"'
+      - name: Web and admin containers serve
+        run: |
+          docker compose -f infra/docker-compose.prod.yml --env-file smoke.env up -d --wait --wait-timeout 120 web admin
+          curl -fsSI http://127.0.0.1:3000/ | grep -qi "x-frame-options: DENY"
+          curl -fsSI http://127.0.0.1:3001/ | grep -qi "x-frame-options: DENY"
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -f infra/docker-compose.prod.yml --env-file smoke.env logs --tail=80
